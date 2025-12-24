@@ -1,4 +1,4 @@
-name: X to Discord (RSSHub, No Duplicates)
+name: X to Discord (No Duplicates, Stable)
 
 on:
   schedule:
@@ -15,60 +15,60 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-            - name: Fetch latest tweet link from RSS
+      # ① 从 Nitter 页面抓最新一条推文（不用 RSS）
+      - name: Fetch latest tweet link from Nitter
         env:
-          RSS_URL: ${{ secrets.RSS_URL }}
+          USERNAME: hourousennin
         run: |
           set -e
-          if [ -z "$RSS_URL" ]; then
-            echo "RSS_URL secret is empty."
-            exit 1
-          fi
 
-          FEED=$(curl -fsSL "$RSS_URL")
+          PAGE=$(curl -fsSL "https://nitter.net/$USERNAME")
 
-          # Grab the first <link> inside an <item> (skip channel-level links)
-          LINK=$(echo "$FEED" | tr '\n' ' ' \
-            | sed 's/<item/\n<item/g' \
-            | sed -n '2p' \
-            | sed -n 's/.*<link>\(.*\)<\/link>.*/\1/p' \
-            | head -n 1)
+          LINK=$(echo "$PAGE" \
+            | grep -o 'href="/'"$USERNAME"'/status/[0-9]*"' \
+            | head -n 1 \
+            | sed 's/href="//;s/"//')
 
           if [ -z "$LINK" ]; then
             echo "Could not parse tweet link."
             exit 1
           fi
 
-          echo "LATEST_LINK=$LINK" >> $GITHUB_ENV
-          echo "Latest link: $LINK"
+          FULL_LINK="https://x.com/$USERNAME${LINK#/$USERNAME}"
 
-            exit 1
-          fi
+          echo "LATEST_LINK=$FULL_LINK" >> $GITHUB_ENV
+          echo "Latest link: $FULL_LINK"
 
-          echo "LATEST_LINK=$LINK" >> $GITHUB_ENV
-
+      # ② 判断是否是新推文（防止重复发）
       - name: Check if new tweet
         run: |
           STATE=".state/last_link.txt"
           mkdir -p .state
+
           LAST=""
-          if [ -f "$STATE" ]; then LAST=$(cat "$STATE"); fi
+          if [ -f "$STATE" ]; then
+            LAST=$(cat "$STATE")
+          fi
 
           if [ "$LATEST_LINK" = "$LAST" ]; then
             echo "POST=false" >> $GITHUB_ENV
+            echo "No new tweet."
           else
             echo "POST=true" >> $GITHUB_ENV
+            echo "New tweet detected."
           fi
 
+      # ③ 发到 Discord
       - name: Post to Discord
         if: env.POST == 'true'
         env:
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           curl -fsSL -H "Content-Type: application/json" \
-            -d "{\"content\":\"📢 X 更新\\n$LATEST_LINK\"}" \
+            -d "{\"content\":\"📢 X 更新\n$LATEST_LINK\"}" \
             "$WEBHOOK"
 
+      # ④ 记录已发送的推文（用于去重）
       - name: Save state
         if: env.POST == 'true'
         run: |
