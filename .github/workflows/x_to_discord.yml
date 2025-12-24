@@ -15,29 +15,55 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ① 从 Nitter 页面抓最新一条推文（不用 RSS）
-      - name: Fetch latest tweet link from Nitter
+      # ① 抓最新推文链接（多镜像，自动切换）
+      - name: Fetch latest tweet link (mirrors)
         env:
           USERNAME: hourousennin
         run: |
           set -e
 
-          PAGE=$(curl -fsSL "https://nitter.net/$USERNAME")
+          # Try multiple mirrors (some block GitHub runners)
+          MIRRORS=(
+            "https://nitter.net"
+            "https://nitter.poast.org"
+            "https://nitter.privacydev.net"
+            "https://nitter.lacontrevoie.fr"
+          )
 
-          LINK=$(echo "$PAGE" \
-            | grep -o 'href="/'"$USERNAME"'/status/[0-9]*"' \
-            | head -n 1 \
-            | sed 's/href="//;s/"//')
+          PAGE=""
+          USED=""
 
-          if [ -z "$LINK" ]; then
-            echo "Could not parse tweet link."
+          for BASE in "${MIRRORS[@]}"; do
+            echo "Trying: $BASE/$USERNAME"
+            if PAGE=$(curl -fsSL --max-time 20 "$BASE/$USERNAME"); then
+              USED="$BASE"
+              # If page contains a status link, stop
+              if echo "$PAGE" | grep -Eq "/$USERNAME/status/[0-9]+"; then
+                break
+              fi
+            fi
+            PAGE=""
+          done
+
+          if [ -z "$PAGE" ]; then
+            echo "Could not fetch any mirror page."
             exit 1
           fi
 
-          FULL_LINK="https://x.com/$USERNAME${LINK#/$USERNAME}"
+          # Extract first status path from HTML
+          PATH_LINK=$(echo "$PAGE" | grep -Eo "/$USERNAME/status/[0-9]+" | head -n 1)
+
+          if [ -z "$PATH_LINK" ]; then
+            echo "Could not parse tweet link."
+            echo "Mirror used: $USED"
+            exit 1
+          fi
+
+          FULL_LINK="https://x.com$PATH_LINK"
 
           echo "LATEST_LINK=$FULL_LINK" >> $GITHUB_ENV
           echo "Latest link: $FULL_LINK"
+          echo "Mirror used: $USED"
 
       # ② 判断是否是新推文（防止重复发）
       - name: Check if new tweet
