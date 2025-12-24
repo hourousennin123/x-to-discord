@@ -1,4 +1,4 @@
-name: X to Discord (No Duplicates, Stable)
+name: X to Discord (RSSHub, No Duplicates)
 
 on:
   schedule:
@@ -15,57 +15,34 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ① 抓最新推文链接（多镜像，自动切换）
-      - name: Fetch latest tweet link (mirrors)
+      # ① 从 RSSHub 抓最新一条推文
+      - name: Fetch latest tweet link from RSSHub
         env:
-          USERNAME: hourousennin
+          RSS_URL: ${{ secrets.RSS_URL }}
         run: |
           set -e
 
-          # Try multiple mirrors (some block GitHub runners)
-          MIRRORS=(
-            "https://nitter.net"
-            "https://nitter.poast.org"
-            "https://nitter.privacydev.net"
-            "https://nitter.lacontrevoie.fr"
-          )
-
-          PAGE=""
-          USED=""
-
-          for BASE in "${MIRRORS[@]}"; do
-            echo "Trying: $BASE/$USERNAME"
-            if PAGE=$(curl -fsSL --max-time 20 "$BASE/$USERNAME"); then
-              USED="$BASE"
-              # If page contains a status link, stop
-              if echo "$PAGE" | grep -Eq "/$USERNAME/status/[0-9]+"; then
-                break
-              fi
-            fi
-            PAGE=""
-          done
-
-          if [ -z "$PAGE" ]; then
-            echo "Could not fetch any mirror page."
+          if [ -z "$RSS_URL" ]; then
+            echo "RSS_URL is empty"
             exit 1
           fi
 
-          # Extract first status path from HTML
-          PATH_LINK=$(echo "$PAGE" | grep -Eo "/$USERNAME/status/[0-9]+" | head -n 1)
+          FEED=$(curl -fsSL "$RSS_URL")
 
-          if [ -z "$PATH_LINK" ]; then
+          LINK=$(echo "$FEED" \
+            | grep -o '<link>https://x.com[^<]*</link>' \
+            | sed 's/<link>//;s/<\/link>//' \
+            | sed -n '2p')
+
+          if [ -z "$LINK" ]; then
             echo "Could not parse tweet link."
-            echo "Mirror used: $USED"
             exit 1
           fi
 
-          FULL_LINK="https://x.com$PATH_LINK"
+          echo "LATEST_LINK=$LINK" >> $GITHUB_ENV
+          echo "Latest link: $LINK"
 
-          echo "LATEST_LINK=$FULL_LINK" >> $GITHUB_ENV
-          echo "Latest link: $FULL_LINK"
-          echo "Mirror used: $USED"
-
-      # ② 判断是否是新推文（防止重复发）
+      # ② 判断是否是新推文
       - name: Check if new tweet
         run: |
           STATE=".state/last_link.txt"
@@ -94,7 +71,7 @@ jobs:
             -d "{\"content\":\"📢 X 更新\n$LATEST_LINK\"}" \
             "$WEBHOOK"
 
-      # ④ 记录已发送的推文（用于去重）
+      # ④ 保存状态（防重复）
       - name: Save state
         if: env.POST == 'true'
         run: |
