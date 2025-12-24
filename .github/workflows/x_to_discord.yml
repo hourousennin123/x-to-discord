@@ -15,28 +15,33 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fetch latest tweet link from RSS
+            - name: Fetch latest tweet link from RSS
         env:
           RSS_URL: ${{ secrets.RSS_URL }}
         run: |
           set -e
-
           if [ -z "$RSS_URL" ]; then
             echo "RSS_URL secret is empty."
             exit 1
           fi
 
-          LINK=$(curl -fsSL "$RSS_URL" | awk 'BEGIN{RS="<item>";FS="\n"} NR==2{
-            for(i=1;i<=NF;i++){
-              if($i~/<link>/){
-                gsub(/.*<link>|<\/link>.*/,"",$i);
-                print $i; exit
-              }
-            }
-          }')
+          FEED=$(curl -fsSL "$RSS_URL")
+
+          # Grab the first <link> inside an <item> (skip channel-level links)
+          LINK=$(echo "$FEED" | tr '\n' ' ' \
+            | sed 's/<item/\n<item/g' \
+            | sed -n '2p' \
+            | sed -n 's/.*<link>\(.*\)<\/link>.*/\1/p' \
+            | head -n 1)
 
           if [ -z "$LINK" ]; then
             echo "Could not parse tweet link."
+            exit 1
+          fi
+
+          echo "LATEST_LINK=$LINK" >> $GITHUB_ENV
+          echo "Latest link: $LINK"
+
             exit 1
           fi
 
